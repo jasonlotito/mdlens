@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+    <title>mdlens</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="../node_modules/codemirror/lib/codemirror.css">
+    <link rel="stylesheet" href="../node_modules/codemirror/theme/github.css">
+    <link rel="stylesheet" href="../node_modules/codemirror/addon/dialog/dialog.css">
+    <link rel="stylesheet" href="lib/github.min.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Custom title bar for macOS -->
+        <div id="title-bar" class="title-bar">
+            <div class="title-bar-drag-region">
+                <span class="title-text">mdlens</span>
+            </div>
+        </div>
+
+        <div id="container" class="split-view">
+            <!-- Editor Panel -->
+            <div id="editor-panel" class="panel">
+                <div id="editor-header" class="panel-header">
+                    <span class="panel-title">Editor</span>
+                </div>
+                <div id="editor-container">
+                    <textarea id="editor"></textarea>
+                    <div id="vim-status" class="vim-status">
+                        <span id="vim-mode">NORMAL</span>
+                        <span id="vim-keys"></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Resizer -->
+            <div id="resizer" class="resizer"></div>
+            
+            <!-- Preview Panel -->
+            <div id="preview-panel" class="panel">
+                <div id="preview-header" class="panel-header">
+                    <span class="panel-title">Preview</span>
+                </div>
+                <div id="preview-container">
+                    <div id="preview-content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>mdlens - Keyboard Shortcuts</h2>
+                <button id="close-help" class="close-button">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="shortcut-section">
+                    <h3>File Operations</h3>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + N</span>
+                        <span class="shortcut-desc">New file</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + Shift + N</span>
+                        <span class="shortcut-desc">New window</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + O</span>
+                        <span class="shortcut-desc">Open file</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + Shift + O</span>
+                        <span class="shortcut-desc">Open file in new window</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + S</span>
+                        <span class="shortcut-desc">Save file</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + Shift + S</span>
+                        <span class="shortcut-desc">Save as</span>
+                    </div>
+                </div>
+                
+                <div class="shortcut-section">
+                    <h3>View</h3>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + \</span>
+                        <span class="shortcut-desc">Toggle between split view and editor-only view</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + Shift + V</span>
+                        <span class="shortcut-desc">Toggle Vim mode</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + Shift + R</span>
+                        <span class="shortcut-desc">Reload .vimrc configuration</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Shift + ?</span>
+                        <span class="shortcut-desc">Show this help dialog</span>
+                    </div>
+                </div>
+                
+                <div class="shortcut-section">
+                    <h3>Editor</h3>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + Z</span>
+                        <span class="shortcut-desc">Undo</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + Y</span>
+                        <span class="shortcut-desc">Redo</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + F</span>
+                        <span class="shortcut-desc">Find</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Ctrl/Cmd + G</span>
+                        <span class="shortcut-desc">Find next</span>
+                    </div>
+                </div>
+
+                <div class="shortcut-section">
+                    <h3>Vim Mode (when enabled)</h3>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">i</span>
+                        <span class="shortcut-desc">Enter insert mode</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">Esc</span>
+                        <span class="shortcut-desc">Return to normal mode</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">h j k l</span>
+                        <span class="shortcut-desc">Move cursor left/down/up/right</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">w / b</span>
+                        <span class="shortcut-desc">Move word forward/backward</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">dd</span>
+                        <span class="shortcut-desc">Delete line</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">yy</span>
+                        <span class="shortcut-desc">Copy line</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">p</span>
+                        <span class="shortcut-desc">Paste</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">v</span>
+                        <span class="shortcut-desc">Visual mode</span>
+                    </div>
+                </div>
+
+                <div class="shortcut-section">
+                    <h3>.vimrc Support</h3>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">~/.vimrc</span>
+                        <span class="shortcut-desc">Automatically loaded on startup</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">set number</span>
+                        <span class="shortcut-desc">Show line numbers</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">set tabstop=4</span>
+                        <span class="shortcut-desc">Set tab width</span>
+                    </div>
+                    <div class="shortcut-item">
+                        <span class="shortcut-key">nnoremap jk &lt;Esc&gt;</span>
+                        <span class="shortcut-desc">Custom key mappings</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="../node_modules/codemirror/lib/codemirror.js"></script>
+    <script src="../node_modules/codemirror/mode/markdown/markdown.js"></script>
+    <script src="../node_modules/codemirror/addon/edit/continuelist.js"></script>
+    <script src="../node_modules/codemirror/addon/search/search.js"></script>
+    <script src="../node_modules/codemirror/addon/search/searchcursor.js"></script>
+    <script src="../node_modules/codemirror/addon/dialog/dialog.js"></script>
+    <script src="../node_modules/codemirror/addon/edit/closebrackets.js"></script>
+    <script src="../node_modules/codemirror/addon/edit/matchbrackets.js"></script>
+    <script src="../node_modules/codemirror/keymap/vim.js"></script>
+    <script src="lib/marked.min.js"></script>
+    <script src="lib/highlight.min.js"></script>
+    <script src="renderer.js"></script>
+</body>
+</html>

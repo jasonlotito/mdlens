@@ -1,0 +1,30 @@
+{
+  "name": "mdlens",
+  "version": "1.0.0",
+  "description": "A clean markdown reader/writer built with Electron",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "markdown",
+    "editor",
+    "electron",
+    "reader",
+    "writer"
+  ],
+  "author": "Jason Lotito",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^38.1.2"
+  },
+  "dependencies": {
+    "codemirror": "^5.65.20",
+    "highlight.js": "^11.11.1",
+    "marked": "^16.3.0"
+  }
+}
