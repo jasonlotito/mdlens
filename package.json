@@ -1,6 +1,6 @@
 {
   "name": "mdlens",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A clean markdown reader/writer built with Electron",
   "main": "src/main.js",
   "scripts": {
