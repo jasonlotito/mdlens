@@ -6,11 +6,12 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "electron-builder",
-    "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux",
-    "release": "electron-builder --publish=always",
+    "clean": "rm -rf dist build",
+    "build": "npm run clean && electron-builder",
+    "build:mac": "npm run clean && electron-builder --mac",
+    "build:win": "npm run clean && electron-builder --win",
+    "build:linux": "npm run clean && electron-builder --linux",
+    "release": "npm run clean && electron-builder --publish=always",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -36,7 +37,8 @@
     "appId": "com.mdlens.app",
     "productName": "mdlens",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "src/**/*",
@@ -47,28 +49,24 @@
         "ext": "md",
         "name": "Markdown Document",
         "description": "Markdown Document",
-        "icon": "build/icon",
         "role": "Editor"
       },
       {
         "ext": "markdown",
         "name": "Markdown Document",
         "description": "Markdown Document",
-        "icon": "build/icon",
         "role": "Editor"
       },
       {
         "ext": "mdown",
         "name": "Markdown Document",
         "description": "Markdown Document",
-        "icon": "build/icon",
         "role": "Editor"
       },
       {
         "ext": "mkd",
         "name": "Markdown Document",
         "description": "Markdown Document",
-        "icon": "build/icon",
         "role": "Editor"
       }
     ],

@@ -34,7 +34,7 @@ fi
 
 # Update package.json version
 echo "📝 Updating package.json version to $VERSION"
-npm version $VERSION --no-git-tag-version
+npm version $VERSION --no-git-tag-version --allow-same-version
 
 # Commit version change
 echo "💾 Committing version change"

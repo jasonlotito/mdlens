@@ -101,6 +101,12 @@ Users can set mdlens as their default markdown editor through their operating sy
 - Ensure the version number follows semantic versioning (e.g., `1.2.0`)
 - Verify that the GitHub token has the necessary permissions
 
+### EEXIST Link Error
+If you see `EEXIST: file already exists, link` errors:
+- The build process automatically cleans `dist/` and `build/` directories
+- This prevents symlink conflicts from previous builds
+- If the error persists, manually run `npm run clean` before building
+
 ### Release Not Created
 - Make sure you pushed the tag: `git push origin v1.2.0`
 - Check that the tag name starts with `v` (e.g., `v1.2.0`)
@@ -110,6 +116,11 @@ Users can set mdlens as their default markdown editor through their operating sy
 - Check the GitHub Actions logs for build errors
 - Ensure all platforms built successfully
 - Verify the artifact upload steps completed
+
+### Icon Warnings
+- The build shows "default Electron icon is used" - this is normal
+- Custom icons can be added later by placing icon files in the `build/` directory
+- File associations work without custom icons
 
 ## Version Numbering
 
