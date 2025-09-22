@@ -5,6 +5,9 @@ let isEditorOnly = false;
 let isResizing = false;
 let isVimMode = true;
 let vimrcConfig = {};
+let hasUnsavedChanges = false;
+let autoSaveTimer = null;
+let lastSavedContent = '';
 
 // Load and apply .vimrc configuration
 async function loadVimrcConfig() {
@@ -118,6 +121,145 @@ function convertVimCommandToCodeMirror(vimCommand) {
     return vimCommand;
 }
 
+// Auto-save functionality
+function startAutoSave() {
+    if (autoSaveTimer) {
+        clearInterval(autoSaveTimer);
+    }
+
+    autoSaveTimer = setInterval(async () => {
+        if (hasUnsavedChanges && currentContent !== lastSavedContent) {
+            try {
+                // Check if we have a file path - if so, save to the actual file
+                const hasFilePath = await window.electronAPI.hasCurrentFile();
+
+                if (hasFilePath) {
+                    // Save to the actual file
+                    const result = await window.electronAPI.saveFile(currentContent);
+                    if (result.success) {
+                        lastSavedContent = currentContent;
+                        markUnsavedChanges(false);
+                        window.electronAPI.fileSavedSuccessfully();
+                        console.log('Auto-saved to file');
+                    }
+                } else {
+                    // No file path, save to scratch file
+                    await window.electronAPI.autoSaveContent(currentContent);
+                    console.log('Auto-saved to scratch');
+                }
+            } catch (error) {
+                console.error('Auto-save failed:', error);
+            }
+        }
+    }, 30000); // Auto-save every 30 seconds
+}
+
+function stopAutoSave() {
+    if (autoSaveTimer) {
+        clearInterval(autoSaveTimer);
+        autoSaveTimer = null;
+    }
+}
+
+// Mark content as having unsaved changes
+function markUnsavedChanges(hasChanges) {
+    hasUnsavedChanges = hasChanges;
+    window.electronAPI.markUnsavedChanges(hasChanges);
+}
+
+// Check for crash recovery (non-blocking)
+async function checkForRecovery() {
+    try {
+        const recoveryData = await window.electronAPI.getRecoveryData();
+
+        if (recoveryData.success && recoveryData.hasScratch && recoveryData.scratchContent) {
+            // Show recovery modal instead of blocking confirm
+            showRecoveryModal(recoveryData.scratchContent);
+            return true; // Indicate recovery is available
+        }
+    } catch (error) {
+        console.error('Recovery check failed:', error);
+    }
+
+    return false;
+}
+
+// Show recovery modal
+function showRecoveryModal(recoveryContent) {
+    // Create recovery modal HTML
+    const modalHTML = `
+        <div id="recovery-modal" class="modal-overlay">
+            <div class="modal-content recovery-modal">
+                <h2>🔄 Crash Recovery</h2>
+                <p>It looks like the application didn't close properly last time.</p>
+                <p>Would you like to recover your unsaved work?</p>
+                <div class="recovery-preview">
+                    <strong>Preview:</strong>
+                    <div class="recovery-content">${recoveryContent.substring(0, 200)}${recoveryContent.length > 200 ? '...' : ''}</div>
+                </div>
+                <div class="modal-buttons">
+                    <button id="recover-yes" class="btn btn-primary">Recover</button>
+                    <button id="recover-no" class="btn btn-secondary">Start Fresh</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Add modal to DOM
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+    // Add event listeners
+    document.getElementById('recover-yes').addEventListener('click', async () => {
+        recoverContent(recoveryContent);
+        closeRecoveryModal();
+        // Clear the scratch file since we recovered the content
+        await window.electronAPI.clearScratch();
+    });
+
+    document.getElementById('recover-no').addEventListener('click', async () => {
+        closeRecoveryModal();
+        // Clear the scratch file since user chose to start fresh
+        await window.electronAPI.clearScratch();
+        // Focus editor for fresh start
+        setTimeout(() => {
+            editor.focus();
+        }, 100);
+    });
+
+    // Close on escape key
+    document.addEventListener('keydown', function escapeHandler(e) {
+        if (e.key === 'Escape') {
+            closeRecoveryModal();
+            // Clear scratch file when dismissing with escape (same as "Start Fresh")
+            window.electronAPI.clearScratch();
+            document.removeEventListener('keydown', escapeHandler);
+        }
+    });
+}
+
+// Recover content
+function recoverContent(content) {
+    editor.setValue(content);
+    currentContent = content;
+    markUnsavedChanges(true);
+    updatePreview();
+
+    // Focus the editor after recovery
+    setTimeout(() => {
+        editor.focus();
+    }, 100);
+
+    console.log('Recovered content from crash');
+}
+
+// Close recovery modal
+function closeRecoveryModal() {
+    const modal = document.getElementById('recovery-modal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
     // Detect platform and add class to body
@@ -129,7 +271,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadVimrcConfig();
 
     // Wait a bit for external libraries to load
-    setTimeout(() => {
+    setTimeout(async () => {
+        // Initialize core components first
         initializeEditor();
         initializePreview();
         initializeResizer();
@@ -141,6 +284,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Set initial content
         updatePreview();
+
+        // Start auto-save timer
+        startAutoSave();
+
+        // Check for crash recovery after everything is initialized (non-blocking)
+        setTimeout(async () => {
+            const hasRecovery = await checkForRecovery();
+            if (!hasRecovery) {
+                // No recovery needed, focus editor for normal start
+                editor.focus();
+            }
+        }, 200); // Small delay to ensure everything is ready
     }, 100);
 });
 
@@ -170,8 +325,16 @@ function initializeEditor() {
 
     // Update preview on content change
     editor.on('change', () => {
-        currentContent = editor.getValue();
-        updatePreview();
+        const newContent = editor.getValue();
+        if (newContent !== currentContent) {
+            currentContent = newContent;
+            updatePreview();
+
+            // Mark as having unsaved changes if content differs from last saved
+            if (currentContent !== lastSavedContent) {
+                markUnsavedChanges(true);
+            }
+        }
     });
 
     // Handle Vim mode changes
@@ -213,6 +376,21 @@ function initializePreview() {
             gfm: true
         });
     }
+
+    // Handle link clicks in preview - open in external browser
+    const previewContainer = document.getElementById('preview-content');
+    previewContainer.addEventListener('click', (event) => {
+        const target = event.target;
+
+        // Check if clicked element is a link or inside a link
+        const link = target.closest('a');
+        if (link && link.href) {
+            event.preventDefault();
+
+            // Open link in external browser
+            window.electronAPI.openExternal(link.href);
+        }
+    });
 }
 
 // Update the preview content
@@ -298,20 +476,39 @@ function initializeEventListeners() {
     window.electronAPI.onNewFile(() => {
         editor.setValue('');
         currentContent = '';
+        lastSavedContent = '';
+        markUnsavedChanges(false);
         updatePreview();
+
+        // Focus the editor so user can start typing immediately
+        setTimeout(() => {
+            editor.focus();
+        }, 100);
     });
 
     // File opened
     window.electronAPI.onFileOpened((event, data) => {
         editor.setValue(data.content);
         currentContent = data.content;
+        lastSavedContent = data.content;
+        markUnsavedChanges(false);
         updatePreview();
+
+        // Focus the editor so user can start typing immediately
+        setTimeout(() => {
+            editor.focus();
+        }, 100);
     });
 
     // Save file
     window.electronAPI.onSaveFile(async () => {
         const result = await window.electronAPI.saveFile(currentContent);
-        if (!result.success) {
+        if (result.success) {
+            lastSavedContent = currentContent;
+            markUnsavedChanges(false);
+            window.electronAPI.fileSavedSuccessfully();
+            console.log('File saved successfully');
+        } else {
             console.error('Save failed:', result.error);
         }
     });
@@ -319,8 +516,27 @@ function initializeEventListeners() {
     // Save file as
     window.electronAPI.onSaveFileAs(async (event, filePath) => {
         const result = await window.electronAPI.saveFileAs(currentContent, filePath);
-        if (!result.success) {
+        if (result.success) {
+            lastSavedContent = currentContent;
+            markUnsavedChanges(false);
+            window.electronAPI.fileSavedSuccessfully();
+            console.log('File saved as:', filePath);
+        } else {
             console.error('Save as failed:', result.error);
+        }
+    });
+
+    // Save before close
+    window.electronAPI.onSaveBeforeClose(async () => {
+        const result = await window.electronAPI.saveFile(currentContent);
+        if (result.success) {
+            lastSavedContent = currentContent;
+            markUnsavedChanges(false);
+            window.electronAPI.fileSavedSuccessfully();
+            // Close the window after successful save
+            window.close();
+        } else {
+            console.error('Save before close failed:', result.error);
         }
     });
 
@@ -360,15 +576,21 @@ function initializeEventListeners() {
 // Initialize keyboard shortcuts
 function initializeKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
-        // Shift + ? for help
-        if (e.shiftKey && e.key === '?') {
+        // Ctrl/Cmd + Shift + ? for help
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'h') {
             e.preventDefault();
             showHelpModal();
         }
-        
+
         // Escape to close modal
         if (e.key === 'Escape') {
             hideHelpModal();
+        }
+
+        // Close window (Ctrl/Cmd + W)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
+            e.preventDefault();
+            window.close();
         }
     });
 
@@ -396,9 +618,10 @@ function toggleView() {
         container.classList.add('split-view');
     }
 
-    // Refresh editor to handle layout changes
+    // Refresh editor to handle layout changes and focus it
     setTimeout(() => {
         editor.refresh();
+        editor.focus();
     }, 100);
 }
 
@@ -418,9 +641,10 @@ function toggleVimMode() {
         document.getElementById('vim-status').style.display = 'none';
     }
 
-    // Refresh editor to handle layout changes
+    // Refresh editor to handle layout changes and focus it
     setTimeout(() => {
         editor.refresh();
+        editor.focus();
     }, 100);
 }
 
@@ -482,7 +706,14 @@ document.addEventListener('drop', (e) => {
         reader.onload = (event) => {
             editor.setValue(event.target.result);
             currentContent = event.target.result;
+            lastSavedContent = ''; // Dropped file is not saved yet
+            markUnsavedChanges(true);
             updatePreview();
+
+            // Focus the editor after drag and drop
+            setTimeout(() => {
+                editor.focus();
+            }, 100);
         };
 
         reader.readAsText(file);
@@ -494,4 +725,9 @@ window.addEventListener('resize', () => {
     setTimeout(() => {
         editor.refresh();
     }, 100);
+});
+
+// Handle window unload
+window.addEventListener('beforeunload', () => {
+    stopAutoSave();
 });

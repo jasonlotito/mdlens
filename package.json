@@ -7,6 +7,10 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux",
+    "release": "electron-builder --publish=always",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -20,11 +24,69 @@
   "license": "MIT",
   "type": "commonjs",
   "devDependencies": {
-    "electron": "^38.1.2"
+    "electron": "^38.1.2",
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
     "codemirror": "^5.65.20",
     "highlight.js": "^11.11.1",
     "marked": "^16.3.0"
+  },
+  "build": {
+    "appId": "com.mdlens.app",
+    "productName": "mdlens",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "icon": "build/icon",
+        "role": "Editor"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "icon": "build/icon",
+        "role": "Editor"
+      },
+      {
+        "ext": "mdown",
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "icon": "build/icon",
+        "role": "Editor"
+      },
+      {
+        "ext": "mkd",
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "icon": "build/icon",
+        "role": "Editor"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Office"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "jasonlotito",
+      "repo": "mdlens"
+    }
   }
 }

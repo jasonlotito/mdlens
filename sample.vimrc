@@ -10,7 +10,7 @@ set autoindent      " Enable auto-indentation
 
 " Custom key mappings
 " Map jk to escape in insert mode (popular Vim customization)
-inoremap jk <Esc>
+inoremap jj <Esc>
 
 " Map leader key combinations (if you use a leader key)
 " nnoremap <leader>w :w<CR>

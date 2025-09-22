@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
@@ -6,6 +6,30 @@ const os = require('os');
 
 let windows = new Map(); // Store window instances and their file paths
 let windowCounter = 0;
+
+// Request single instance lock
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  app.quit();
+} else {
+  // Continue with normal app initialization
+}
+
+// Auto-save configuration
+const AUTO_SAVE_INTERVAL = 30000; // 30 seconds
+const SCRATCH_DIR = path.join(os.homedir(), '.mdlens');
+const SCRATCH_FILE = path.join(SCRATCH_DIR, 'scratch.md');
+const SESSION_FILE = path.join(SCRATCH_DIR, 'session.json');
+
+// Ensure scratch directory exists
+async function ensureScratchDir() {
+  try {
+    await fs.mkdir(SCRATCH_DIR, { recursive: true });
+  } catch (error) {
+    console.error('Failed to create scratch directory:', error);
+  }
+}
 
 // Function to read and parse .vimrc file
 async function readVimrc() {
@@ -87,6 +111,73 @@ function parseVimrc(content) {
   return config;
 }
 
+// Session management functions
+async function saveSession() {
+  try {
+    const sessionData = {
+      windows: [],
+      timestamp: Date.now()
+    };
+
+    for (const [id, windowData] of windows.entries()) {
+      if (!windowData.window.isDestroyed()) {
+        sessionData.windows.push({
+          id: id,
+          filePath: windowData.filePath,
+          hasUnsavedChanges: windowData.hasUnsavedChanges || false
+        });
+      }
+    }
+
+    await fs.writeFile(SESSION_FILE, JSON.stringify(sessionData, null, 2));
+  } catch (error) {
+    console.error('Failed to save session:', error);
+  }
+}
+
+async function loadSession() {
+  try {
+    const sessionData = JSON.parse(await fs.readFile(SESSION_FILE, 'utf8'));
+    return sessionData;
+  } catch (error) {
+    // Session file doesn't exist or is corrupted
+    return null;
+  }
+}
+
+async function clearSession() {
+  try {
+    await fs.unlink(SESSION_FILE);
+  } catch (error) {
+    // File doesn't exist, that's fine
+  }
+}
+
+async function saveScratchFile(content) {
+  try {
+    await ensureScratchDir();
+    await fs.writeFile(SCRATCH_FILE, content);
+  } catch (error) {
+    console.error('Failed to save scratch file:', error);
+  }
+}
+
+async function loadScratchFile() {
+  try {
+    return await fs.readFile(SCRATCH_FILE, 'utf8');
+  } catch (error) {
+    return null;
+  }
+}
+
+async function clearScratchFile() {
+  try {
+    await fs.unlink(SCRATCH_FILE);
+  } catch (error) {
+    // File doesn't exist, that's fine
+  }
+}
+
 function createWindow(filePath = null) {
   const windowId = ++windowCounter;
 
@@ -108,7 +199,9 @@ function createWindow(filePath = null) {
   windows.set(windowId, {
     window: window,
     filePath: filePath,
-    id: windowId
+    id: windowId,
+    hasUnsavedChanges: false,
+    autoSaveTimer: null
   });
 
   window.loadFile(path.join(__dirname, 'index.html'));
@@ -122,8 +215,43 @@ function createWindow(filePath = null) {
     }
   });
 
+  window.on('close', async (event) => {
+    const windowData = windows.get(windowId);
+    if (windowData && windowData.hasUnsavedChanges) {
+      event.preventDefault();
+
+      const choice = await dialog.showMessageBox(window, {
+        type: 'question',
+        buttons: ['Save', "Don't Save", 'Cancel'],
+        defaultId: 0,
+        message: 'Do you want to save your changes before closing?',
+        detail: 'Your changes will be lost if you don\'t save them.'
+      });
+
+      if (choice.response === 0) { // Save
+        window.webContents.send('save-before-close');
+      } else if (choice.response === 1) { // Don't Save
+        // Clear scratch file if this was the last window
+        if (windows.size === 1) {
+          await clearScratchFile();
+        }
+        windowData.hasUnsavedChanges = false;
+        window.destroy();
+      }
+      // Cancel - do nothing, window stays open
+    } else {
+      // No unsaved changes, safe to close
+      window.destroy();
+    }
+  });
+
   window.on('closed', () => {
+    const windowData = windows.get(windowId);
+    if (windowData && windowData.autoSaveTimer) {
+      clearInterval(windowData.autoSaveTimer);
+    }
     windows.delete(windowId);
+    saveSession(); // Update session when window closes
   });
 
   // Set up the menu (will be shared across all windows)
@@ -135,7 +263,13 @@ function createWindow(filePath = null) {
 // Helper function to get the currently focused window data
 function getActiveWindowData() {
   const focusedWindow = BrowserWindow.getFocusedWindow();
-  if (!focusedWindow) return null;
+  if (!focusedWindow) {
+    // If no focused window, try to get any available window
+    if (windows.size > 0) {
+      return windows.values().next().value;
+    }
+    return null;
+  }
 
   for (const [id, data] of windows.entries()) {
     if (data.window === focusedWindow) {
@@ -148,15 +282,39 @@ function getActiveWindowData() {
 // Helper function to open a file in a specific window
 async function openFileInWindow(windowId, filePath) {
   const windowData = windows.get(windowId);
-  if (!windowData) return;
+  if (!windowData) {
+    console.error(`Window with ID ${windowId} not found`);
+    return;
+  }
 
   try {
+    // Check if path exists and is a file
+    const stats = await fs.stat(filePath);
+    if (!stats.isFile()) {
+      throw new Error(`Path is not a file: ${filePath}`);
+    }
+
     const content = await fs.readFile(filePath, 'utf8');
     windowData.filePath = filePath;
-    windowData.window.webContents.send('file-opened', { content, filePath });
-    updateWindowTitle(windowId);
+
+    // Check if window still exists before sending message
+    if (!windowData.window.isDestroyed()) {
+      windowData.window.webContents.send('file-opened', { content, filePath });
+      updateWindowTitle(windowId);
+    }
   } catch (error) {
-    dialog.showErrorBox('Error', `Could not open file: ${error.message}`);
+    console.error('Error opening file:', error);
+    if (!windowData.window.isDestroyed()) {
+      let errorMessage = `Could not open file: ${error.message}`;
+      if (error.code === 'EISDIR') {
+        errorMessage = `Cannot open directory as file: ${filePath}`;
+      } else if (error.code === 'ENOENT') {
+        errorMessage = `File not found: ${filePath}`;
+      } else if (error.code === 'EACCES') {
+        errorMessage = `Permission denied: ${filePath}`;
+      }
+      dialog.showErrorBox('Error', errorMessage);
+    }
   }
 }
 
@@ -197,6 +355,17 @@ function createMenu() {
         },
         { type: 'separator' },
         {
+          label: 'Close Window',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => {
+            const activeWindow = getActiveWindowData();
+            if (activeWindow) {
+              activeWindow.window.close();
+            }
+          }
+        },
+        { type: 'separator' },
+        {
           label: 'Quit',
           accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
           click: () => app.quit()
@@ -208,10 +377,14 @@ function createMenu() {
       submenu: [
         {
           label: 'Toggle Editor/Preview',
-          accelerator: 'CmdOrCtrl+\\',
+          accelerator: 'CmdOrCtrl+Shift+\\',
           click: () => {
             const activeWindow = getActiveWindowData();
-            if (activeWindow) activeWindow.window.webContents.send('toggle-view');
+            if (activeWindow) {
+              activeWindow.window.webContents.send('toggle-view');
+            } else {
+              console.warn('No active window for toggle view');
+            }
           }
         },
         {
@@ -219,7 +392,11 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+Shift+V',
           click: () => {
             const activeWindow = getActiveWindowData();
-            if (activeWindow) activeWindow.window.webContents.send('toggle-vim');
+            if (activeWindow) {
+              activeWindow.window.webContents.send('toggle-vim');
+            } else {
+              console.warn('No active window for toggle vim');
+            }
           }
         },
         {
@@ -227,7 +404,11 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => {
             const activeWindow = getActiveWindowData();
-            if (activeWindow) activeWindow.window.webContents.send('reload-vimrc');
+            if (activeWindow) {
+              activeWindow.window.webContents.send('reload-vimrc');
+            } else {
+              console.warn('No active window for reload vimrc');
+            }
           }
         },
         {
@@ -235,7 +416,11 @@ function createMenu() {
           accelerator: process.platform === 'darwin' ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
           click: () => {
             const activeWindow = getActiveWindowData();
-            if (activeWindow) activeWindow.window.webContents.toggleDevTools();
+            if (activeWindow) {
+              activeWindow.window.webContents.toggleDevTools();
+            } else {
+              console.warn('No active window for dev tools');
+            }
           }
         }
       ]
@@ -245,10 +430,14 @@ function createMenu() {
       submenu: [
         {
           label: 'Keyboard Shortcuts',
-          accelerator: 'Shift+?',
+          accelerator: 'CmdOrCtrl+Shift+?',
           click: () => {
             const activeWindow = getActiveWindowData();
-            if (activeWindow) activeWindow.window.webContents.send('show-help');
+            if (activeWindow) {
+              activeWindow.window.webContents.send('show-help');
+            } else {
+              console.warn('No active window for help');
+            }
           }
         }
       ]
@@ -279,7 +468,11 @@ function createMenu() {
 
 async function newFile() {
   const activeWindow = getActiveWindowData();
-  if (!activeWindow) return;
+  if (!activeWindow) {
+    // No windows available, create a new one
+    createWindow();
+    return;
+  }
 
   activeWindow.filePath = null;
   activeWindow.window.webContents.send('new-file');
@@ -288,7 +481,11 @@ async function newFile() {
 
 async function openFile() {
   const activeWindow = getActiveWindowData();
-  if (!activeWindow) return;
+  if (!activeWindow) {
+    // No windows available, open file in new window
+    openFileInNewWindow();
+    return;
+  }
 
   const result = await dialog.showOpenDialog(activeWindow.window, {
     properties: ['openFile'],
@@ -321,7 +518,10 @@ async function openFileInNewWindow() {
 
 async function saveFile() {
   const activeWindow = getActiveWindowData();
-  if (!activeWindow) return;
+  if (!activeWindow) {
+    console.warn('No active window available for save operation');
+    return;
+  }
 
   if (activeWindow.filePath) {
     activeWindow.window.webContents.send('save-file');
@@ -332,7 +532,10 @@ async function saveFile() {
 
 async function saveFileAs() {
   const activeWindow = getActiveWindowData();
-  if (!activeWindow) return;
+  if (!activeWindow) {
+    console.warn('No active window available for save as operation');
+    return;
+  }
 
   const result = await dialog.showSaveDialog(activeWindow.window, {
     filters: [
@@ -350,15 +553,21 @@ async function saveFileAs() {
 
 function updateWindowTitle(windowId) {
   const windowData = windows.get(windowId);
-  if (!windowData) return;
+  if (!windowData || windowData.window.isDestroyed()) {
+    return;
+  }
 
   const title = windowData.filePath
     ? `${path.basename(windowData.filePath)} - mdlens`
     : 'Untitled - mdlens';
-  windowData.window.setTitle(title);
 
-  // Also update the custom title bar if it exists
-  windowData.window.webContents.send('update-title', title);
+  try {
+    windowData.window.setTitle(title);
+    // Also update the custom title bar if it exists
+    windowData.window.webContents.send('update-title', title);
+  } catch (error) {
+    console.error('Error updating window title:', error);
+  }
 }
 
 // Helper function to get window data from event
@@ -402,6 +611,11 @@ ipcMain.handle('save-file-as-content', async (event, { content, filePath }) => {
   }
 });
 
+ipcMain.handle('has-current-file', async (event) => {
+  const windowData = getWindowDataFromEvent(event);
+  return windowData && windowData.filePath ? true : false;
+});
+
 ipcMain.handle('load-vimrc', async () => {
   try {
     const vimrcConfig = await readVimrc();
@@ -411,7 +625,97 @@ ipcMain.handle('load-vimrc', async () => {
   }
 });
 
-app.whenReady().then(() => {
+// Auto-save and recovery IPC handlers
+ipcMain.handle('auto-save-content', async (event, content) => {
+  await saveScratchFile(content);
+  return { success: true };
+});
+
+ipcMain.handle('load-scratch', async () => {
+  try {
+    const content = await loadScratchFile();
+    return { success: true, content };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('clear-scratch', async () => {
+  try {
+    await clearScratchFile();
+    await clearSession();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('mark-unsaved-changes', async (event, hasChanges) => {
+  const windowData = getWindowDataFromEvent(event);
+  if (windowData) {
+    windowData.hasUnsavedChanges = hasChanges;
+    saveSession(); // Update session when changes state changes
+  }
+  return { success: true };
+});
+
+ipcMain.handle('get-recovery-data', async () => {
+  try {
+    const session = await loadSession();
+    const scratchContent = await loadScratchFile();
+
+    return {
+      success: true,
+      session,
+      scratchContent,
+      hasScratch: !!scratchContent
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.on('file-saved-successfully', (event) => {
+  const windowData = getWindowDataFromEvent(event);
+  if (windowData) {
+    windowData.hasUnsavedChanges = false;
+    saveSession();
+  }
+});
+
+// Handle external link opening
+ipcMain.handle('open-external', async (event, url) => {
+  try {
+    // Validate URL to prevent security issues
+    const urlObj = new URL(url);
+    const allowedProtocols = ['http:', 'https:', 'mailto:', 'tel:'];
+
+    if (allowedProtocols.includes(urlObj.protocol)) {
+      await shell.openExternal(url);
+      return { success: true };
+    } else {
+      console.warn('Blocked attempt to open URL with unsupported protocol:', url);
+      return { success: false, error: 'Unsupported protocol' };
+    }
+  } catch (error) {
+    console.error('Failed to open external URL:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+app.whenReady().then(async () => {
+  await ensureScratchDir();
+
+  // Register file associations for markdown files
+  if (process.platform === 'win32') {
+    app.setAsDefaultProtocolClient('mdlens');
+  }
+
+  // Set app user model ID for Windows
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.mdlens.app');
+  }
+
   // Check for command line arguments
   const args = process.argv.slice(2);
   const filesToOpen = args.filter(arg => !arg.startsWith('-'));
@@ -420,12 +724,36 @@ app.whenReady().then(() => {
     // Open each file in a separate window
     filesToOpen.forEach(filePath => {
       if (fsSync.existsSync(filePath)) {
-        createWindow(path.resolve(filePath));
+        const stats = fsSync.statSync(filePath);
+        if (stats.isFile()) {
+          createWindow(path.resolve(filePath));
+        } else {
+          console.warn(`Skipping directory: ${filePath}`);
+        }
       }
     });
   } else {
-    // No files specified, create empty window
-    createWindow();
+    // Check for crash recovery
+    const session = await loadSession();
+    const scratchContent = await loadScratchFile();
+
+    if (scratchContent && session && session.windows.length > 0) {
+      // Potential crash recovery scenario
+      const hasUnsavedWork = session.windows.some(w => w.hasUnsavedChanges);
+
+      if (hasUnsavedWork) {
+        // Create window and let renderer handle recovery
+        createWindow();
+      } else {
+        // Clean session, clear scratch and start fresh
+        await clearScratchFile();
+        await clearSession();
+        createWindow();
+      }
+    } else {
+      // No recovery needed, create empty window
+      createWindow();
+    }
   }
 });
 
@@ -438,5 +766,55 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  }
+});
+
+// Handle file opening on macOS
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+
+  // Check if it's actually a file, not a directory
+  if (fsSync.existsSync(filePath)) {
+    const stats = fsSync.statSync(filePath);
+    if (!stats.isFile()) {
+      console.warn(`Skipping directory: ${filePath}`);
+      return;
+    }
+  }
+
+  if (app.isReady()) {
+    // App is already running, open file in new window
+    createWindow(filePath);
+  } else {
+    // App is starting, store file to open after ready
+    process.argv.push(filePath);
+  }
+});
+
+// Handle file opening on Windows/Linux via second instance
+app.on('second-instance', (event, commandLine, workingDirectory) => {
+  // Someone tried to run a second instance, focus existing window instead
+  const args = commandLine.slice(2);
+  const filesToOpen = args.filter(arg => {
+    if (arg.startsWith('-')) return false;
+    if (!fsSync.existsSync(arg)) return false;
+    const stats = fsSync.statSync(arg);
+    return stats.isFile();
+  });
+
+  if (filesToOpen.length > 0) {
+    // Open each file in a separate window
+    filesToOpen.forEach(filePath => {
+      createWindow(path.resolve(filePath));
+    });
+  } else {
+    // No files, just focus an existing window or create new one
+    const existingWindow = BrowserWindow.getAllWindows()[0];
+    if (existingWindow) {
+      if (existingWindow.isMinimized()) existingWindow.restore();
+      existingWindow.focus();
+    } else {
+      createWindow();
+    }
   }
 });
