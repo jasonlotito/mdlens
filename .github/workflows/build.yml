@@ -46,14 +46,6 @@ jobs:
           if (Test-Path build) { Remove-Item -Recurse -Force build }
         shell: powershell
 
-      - name: Build and release (with GitHub publish)
-        if: startsWith(github.ref, 'refs/tags/')
-        run: npm run release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ELECTRON_CACHE: ${{ runner.temp }}/electron
-          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder
-
       - name: Build only (no publish)
         if: github.event_name == 'workflow_dispatch'
         run: npm run build
