@@ -718,20 +718,38 @@ app.whenReady().then(async () => {
 
   // Check for command line arguments
   const args = process.argv.slice(2);
-  const filesToOpen = args.filter(arg => !arg.startsWith('-'));
+  const filesToOpen = args
+    .filter(arg => !arg.startsWith('-'))
+    .map(arg => path.resolve(arg));
 
   if (filesToOpen.length > 0) {
     // Open each file in a separate window
+    let openedAny = false;
     filesToOpen.forEach(filePath => {
       if (fsSync.existsSync(filePath)) {
         const stats = fsSync.statSync(filePath);
         if (stats.isFile()) {
-          createWindow(path.resolve(filePath));
+          createWindow(filePath);
+          openedAny = true;
         } else {
           console.warn(`Skipping directory: ${filePath}`);
         }
+      } else {
+        // File doesn't exist yet - create it and open it
+        try {
+          fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+          fsSync.writeFileSync(filePath, '', 'utf8');
+          createWindow(filePath);
+          openedAny = true;
+        } catch (error) {
+          console.error(`Failed to create file: ${filePath}`, error);
+        }
       }
     });
+    // If none of the files could be opened, create an empty window
+    if (!openedAny) {
+      createWindow();
+    }
   } else {
     // Check for crash recovery
     const session = await loadSession();
@@ -773,21 +791,31 @@ app.on('activate', () => {
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
 
-  // Check if it's actually a file, not a directory
-  if (fsSync.existsSync(filePath)) {
-    const stats = fsSync.statSync(filePath);
+  const resolvedPath = path.resolve(filePath);
+
+  if (fsSync.existsSync(resolvedPath)) {
+    const stats = fsSync.statSync(resolvedPath);
     if (!stats.isFile()) {
-      console.warn(`Skipping directory: ${filePath}`);
+      console.warn(`Skipping directory: ${resolvedPath}`);
+      return;
+    }
+  } else {
+    // File doesn't exist yet - create it
+    try {
+      fsSync.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+      fsSync.writeFileSync(resolvedPath, '', 'utf8');
+    } catch (error) {
+      console.error(`Failed to create file: ${resolvedPath}`, error);
       return;
     }
   }
 
   if (app.isReady()) {
     // App is already running, open file in new window
-    createWindow(filePath);
+    createWindow(resolvedPath);
   } else {
     // App is starting, store file to open after ready
-    process.argv.push(filePath);
+    process.argv.push(resolvedPath);
   }
 });
 
@@ -795,19 +823,32 @@ app.on('open-file', (event, filePath) => {
 app.on('second-instance', (event, commandLine, workingDirectory) => {
   // Someone tried to run a second instance, focus existing window instead
   const args = commandLine.slice(2);
-  const filesToOpen = args.filter(arg => {
-    if (arg.startsWith('-')) return false;
-    if (!fsSync.existsSync(arg)) return false;
-    const stats = fsSync.statSync(arg);
-    return stats.isFile();
+  const filesToOpen = args
+    .filter(arg => !arg.startsWith('-'))
+    .map(arg => path.resolve(workingDirectory, arg));
+
+  let openedAny = false;
+  filesToOpen.forEach(filePath => {
+    if (fsSync.existsSync(filePath)) {
+      const stats = fsSync.statSync(filePath);
+      if (stats.isFile()) {
+        createWindow(filePath);
+        openedAny = true;
+      }
+    } else {
+      // File doesn't exist yet - create it
+      try {
+        fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+        fsSync.writeFileSync(filePath, '', 'utf8');
+        createWindow(filePath);
+        openedAny = true;
+      } catch (error) {
+        console.error(`Failed to create file: ${filePath}`, error);
+      }
+    }
   });
 
-  if (filesToOpen.length > 0) {
-    // Open each file in a separate window
-    filesToOpen.forEach(filePath => {
-      createWindow(path.resolve(filePath));
-    });
-  } else {
+  if (!openedAny) {
     // No files, just focus an existing window or create new one
     const existingWindow = BrowserWindow.getAllWindows()[0];
     if (existingWindow) {
